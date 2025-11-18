@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Photolithography CD Explorer</title>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>
+body { font-family: Arial, sans-serif; margin: 30px; }
+.param { margin-bottom: 14px; }
+.param label { display:inline-block; width:260px; vertical-align:middle; }
+.val { font-weight:600; margin-left:8px; }
+#graph { width:100%; max-width:900px; height:420px; }
+</style>
+</head>
+<body>
+
+<h1>Photolithography Critical Dimension Calculator</h1>
+
+<div class="param">
+  <label>Wavelength λ (nm) — region: <span id="region_label">Visible</span></label><br>
+  <input id="lambda_slider" type="range" min="0.01" max="500" step="0.1" value="193" style="width:400px;" oninput="sliderToInput()">
+  <input id="lambda_input" type="number" min="0.01" max="500" step="0.01" value="193" style="width:100px;" oninput="inputToSlider()">
+</div>
+
+<div class="param">
+  <label>Numerical Aperture (NA)</label>
+  <input id="na" type="range" min="0.2" max="1.4" step="0.01" value="0.85" style="width:400px;" oninput="updateValues()">
+  <span id="na_val" class="val">0.85</span>
+</div>
+
+<div class="param">
+  <label>Process factor k₁ (min 0.25)</label>
+  <input id="k1" type="range" min="0.25" max="1.0" step="0.01" value="0.40" style="width:400px;" oninput="updateValues()">
+  <span id="k1_val" class="val">0.40</span>
+</div>
+
+<h3>Results</h3>
+<p>
+  <strong>CD (formula):</strong> <span id="cd_value">—</span> nm &nbsp;&nbsp;|&nbsp;&nbsp;
+  <strong>Printed width (threshold):</strong> <span id="pw_value">—</span> nm
+</p>
+
+<div id="graph"></div>
+<div id="graph_note" style="max-width:900px; font-size:0.95em; color:#333; margin-top:8px;">
+  <!-- Note will appear here -->
+</div>
+
+<script>
+// region and color
+function classifyRegion(lambda){
+  if(lambda<10) return "X-ray";
+  if(lambda<124) return "EUV";
+  if(lambda<300) return "DUV";
+  if(lambda<400) return "UV";
+  if(lambda<=700) return "Visible";
+  return "IR";
+}
+function wavelengthColor(lambda){
+  if(lambda<10) return "#4b00ff";
+  if(lambda<124) return "#6b00ff";
+  if(lambda<300) return "#0044ff";
+  if(lambda<380) return "#2a00ff";
+  if(lambda>=380 && lambda<=700){
+    let nm=lambda,r=0,g=0,b=0;
+    if(nm>=380 && nm<440){r=-(nm-440)/(440-380); g=0; b=1;}
+    else if(nm>=440 && nm<490){r=0; g=(nm-440)/(490-440); b=1;}
+    else if(nm>=490 && nm<510){r=0; g=1; b=-(nm-510)/(510-490);}
+    else if(nm>=510 && nm<580){r=(nm-510)/(580-510); g=1; b=0;}
+    else if(nm>=580 && nm<645){r=1; g=-(nm-645)/(645-580); b=0;}
+    else if(nm>=645 && nm<=700){r=1; g=0; b=0;}
+    r=Math.round(r*255); g=Math.round(g*255); b=Math.round(b*255);
+    return `rgb(${r},${g},${b})`;
+  }
+  return "#ff6a00";
+}
+
+// input-slider sync
+function sliderToInput(){
+  const s=document.getElementById("lambda_slider").value;
+  document.getElementById("lambda_input").value=parseFloat(s).toFixed(2);
+  updateValues();
+}
+function inputToSlider(){
+  let v=parseFloat(document.getElementById("lambda_input").value);
+  if(isNaN(v)||v<0.01) v=0.01;
+  if(v>500) v=500;
+  document.getElementById("lambda_slider").value=v;
+  updateValues();
+}
+
+// main update
+function updateValues(){
+function updateGraphNote(sigma, threshold) {
+    const noteText = `
+    <b>Note1:</b> This is a simplified model of diffraction to help visualize how CD depends on λ, NA, and k₁.<br>
+    <b>Note2:</b> Critical dimension (CD) represents the smallest feature the optical system can theoretically resolve.
+    The printed width is the feature size that actually appears in the resist, and can differ from CD due to exposure dose, resist chemistry, threshold behavior, and other process effects.
+    `;
+    document.getElementById("graph_note").innerHTML = noteText;
+}
+
+  const lambda=parseFloat(document.getElementById("lambda_slider").value);
+  const na=parseFloat(document.getElementById("na").value);
+  const k1=parseFloat(document.getElementById("k1").value);
+
+  document.getElementById("na_val").innerText=na.toFixed(2);
+  document.getElementById("k1_val").innerText=k1.toFixed(2);
+  document.getElementById("region_label").innerText=classifyRegion(lambda);
+
+  document.getElementById("lambda_slider").style.background=wavelengthColor(lambda);
+
+  const cd=k1*lambda/na;
+  document.getElementById("cd_value").innerText=cd.toFixed(2);
+
+  // sigma depends on optical blur AND process factor k1
+  const sigma = 0.42 * lambda / na * Math.pow(k1,0.5);
+  const threshold = 0.3 + 0.2*(k1-0.25);
+  const printedWidth=2*Math.sqrt(2*Math.log(1/threshold))*sigma;
+  document.getElementById("pw_value").innerText=printedWidth.toFixed(2);
+updateGraphNote(sigma, threshold);
+
+  plotAerial(lambda, sigma, cd, printedWidth);
+}
+
+// plot
+function plotAerial(lambda,sigma,cd,printedWidth){
+  const span=Math.max(5*sigma,200);
+  const x=[]; const y=[];
+  for(let i=-span;i<=span;i+=2){x.push(i); y.push(Math.exp(-i*i/(2*sigma*sigma)));}
+  
+  const aerial={x:x,y:y,type:'scatter',line:{width:3,color:'#1f77b4'},name:'Aerial'};
+  const traces = [
+  aerial,
+
+  // --- CD ---
+  {
+    x: [-cd/2, -cd/2],
+    y: [0, 1],
+    mode: 'lines',
+    line: { color: 'green', dash: 'dot', width: 2 },
+    name: 'CD'
+  },
+  {
+    x: [cd/2, cd/2],
+    y: [0, 1],
+    mode: 'lines',
+    showlegend: false,
+    line: { color: 'green', dash: 'dot', width: 2 }
+  },
+
+  // --- Printed Width ---
+  {
+    x: [-printedWidth/2, -printedWidth/2],
+    y: [0, 1],
+    mode: 'lines',
+    line: { color: 'orange', dash: 'dash', width: 2 },
+    name: 'Printed Width'
+  },
+  {
+    x: [printedWidth/2, printedWidth/2],
+    y: [0, 1],
+    mode: 'lines',
+    showlegend: false,
+    line: { color: 'orange', dash: 'dash', width: 2 }
+  }
+];
+  const layout={
+    title:`Aerial Image`,
+    xaxis:{title:'Position (nm)',range:[-span,span]},
+    yaxis:{title:'Normalized intensity',range:[0,1.1]},
+    legend:{orientation:'h',x:0,y:1.15}
+  };
+  Plotly.react('graph', traces, layout, {responsive:true});
+}
+
+// init
+updateValues();
+</script>
+</body>
+</html>
